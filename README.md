@@ -28,8 +28,6 @@ Fulltext indexes: article_content_idx on Article.content, rule_idx on Rule.actio
   <img src="neo4j_graph_relationships.png" alt="Neo4j KG Relationships" width="800" />
 </p>
 
-> Screenshot filename: `neo4j_graph_relationships.png` should be placed in the repository root.
-
 ### Key Cypher Query Design and Retrieval Strategy
 
 Typed query: Filters by rule type and contains checks on action/result.
@@ -42,3 +40,7 @@ Retrieval: Run both queries, merge results, deduplicate, add article content fro
 Initial extraction had low coverage due to LLM parsing issues. Improved prompt specificity for better JSON output. Added article content fallback for context.
 
 Query accuracy improved by combining typed and broad strategies, ensuring high recall.
+
+## Verification Status
+
+- `auto_test.py` has been executed and passed all benchmark tests.
