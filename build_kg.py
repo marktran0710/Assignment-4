@@ -9,6 +9,7 @@ Keep this contract unchanged:
 """
 
 import os
+import re
 import sqlite3
 from typing import Any
 
@@ -67,8 +68,71 @@ Output format: [{{"type": "penalty", "action": "forgetting student ID", "result"
 
 
 def build_fallback_rules(article_number: str, content: str) -> list[dict[str, str]]:
-    """TODO(student, optional): add deterministic fallback rules."""
-    return []
+    """Generate deterministic fallback rule candidates when LLM extraction fails."""
+    rules: list[dict[str, str]] = []
+    text = content or ""
+    if not text.strip():
+        return rules
+
+    def normalize_rule_type(sentence: str) -> str:
+        lower = sentence.lower()
+        if any(k in lower for k in ["penalty", "deduct", "fine", "barred", "suspend", "forfeit", "zero score"]):
+            return "penalty"
+        if any(k in lower for k in ["must ", "shall ", "required", "need to", "required to"]):
+            return "requirement"
+        if any(k in lower for k in ["apply", "submit", "report", "procedure", "process", "register", "request"]):
+            return "procedure"
+        if any(k in lower for k in ["may ", "allowed", "permission"]):
+            return "permission"
+        if any(k in lower for k in ["cannot", "not allowed", "prohibited", "forbidden", "no "]):
+            return "limitation"
+        return "general"
+
+    def extract_condition_result(sentence: str) -> tuple[str, str]:
+        lower = sentence.lower()
+        match = re.search(r"\b(if|when|in case)\b(.+?)[,;:]\s*(.+)", lower)
+        if match:
+            action = match.group(2).strip()
+            result = match.group(3).strip()
+            return action, result
+
+        if " will " in lower:
+            parts = re.split(r"\bwill\b", sentence, maxsplit=1)
+            if len(parts) == 2:
+                return parts[0].strip(), f"will {parts[1].strip()}"
+
+        if " must " in lower or " shall " in lower or " required " in lower:
+            return sentence.strip(), "Requirement"
+
+        return sentence.strip(), "See article text"
+
+    seen: set[tuple[str, str]] = set()
+    sentences = re.split(r"(?<=[.!?;])\s+", text)
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if len(sentence) < 20:
+            continue
+        lower = sentence.lower()
+        if not any(k in lower for k in ["if ", "when ", "must ", "shall ", "required", "penalty", "deduct", "fine", "prohibited", "not allowed", "allowed", "may ", "apply", "submit", "report", "procedure"]):
+            continue
+
+        action, result = extract_condition_result(sentence)
+        if not action or not result:
+            continue
+
+        rule_type = normalize_rule_type(sentence)
+        key = (action, result)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        rules.append({
+            "type": rule_type,
+            "action": action,
+            "result": result,
+        })
+
+    return rules
 
 
 # SQLite tables used:
@@ -144,8 +208,14 @@ def build_graph() -> None:
         for reg_id, article_number, content in articles:
             reg_name, reg_category = reg_map.get(reg_id, ("Unknown", "Unknown"))
             entities = extract_entities(article_number, reg_name, content)
-            rules = entities.get("rules", [])
-            
+            rules: list[dict[str, str]] = []
+            for rule in entities.get("rules", []):
+                if rule.get("action") and rule.get("result"):
+                    rules.append(rule)
+
+            if not rules:
+                rules = build_fallback_rules(article_number, content)
+
             for rule in rules:
                 if not rule.get("action") or not rule.get("result"):
                     continue  # Skip invalid rules
@@ -155,7 +225,7 @@ def build_graph() -> None:
                 
                 session.run(
                     """
-                    MATCH (a:Article {number: $art_num})
+                    MATCH (a:Article {number: $art_num, reg_name: $reg_name})
                     CREATE (r:Rule {
                         rule_id: $rule_id,
                         type: $type,
@@ -167,12 +237,12 @@ def build_graph() -> None:
                     MERGE (a)-[:CONTAINS_RULE]->(r)
                     """,
                     art_num=article_number,
+                    reg_name=reg_name,
                     rule_id=rule_id,
                     type=rule.get("type", "general"),
                     action=rule["action"],
                     result=rule["result"],
                     art_ref=article_number,
-                    reg_name=reg_name,
                 )
 
         # 4) Create full-text index on Rule fields.
