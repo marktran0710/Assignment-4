@@ -25,6 +25,7 @@ Design choices:
 Fulltext indexes: article_content_idx on Article.content, rule_idx on Rule.action and Rule.result.
 
 <p align="center">
+  <strong>Figure: Knowledge Graph - All Relationships Between Regulation, Article, and Rule</strong><br>
   <img src="graph-result.png" alt="Graph showing all relationships between objects" width="800" />
 </p>
 
@@ -42,8 +43,6 @@ Initial extraction had low coverage due to LLM parsing issues. Improved prompt s
 Query accuracy improved by combining typed and broad strategies, ensuring high recall.
 
 ## Verification Status
-
-- `auto_test.py
 
 - `auto-test-result.png`: auto-test.py passes 100%.
 <p align="center">
