@@ -25,7 +25,7 @@ Design choices:
 Fulltext indexes: article_content_idx on Article.content, rule_idx on Rule.action and Rule.result.
 
 <p align="center">
-  <img src="neo4j_graph_relationships.png" alt="Neo4j KG Relationships" width="800" />
+  <img src="graph-result.png" alt="Graph showing all relationships between objects" width="800" />
 </p>
 
 ### Key Cypher Query Design and Retrieval Strategy
@@ -43,4 +43,9 @@ Query accuracy improved by combining typed and broad strategies, ensuring high r
 
 ## Verification Status
 
-- `auto_test.py` has been executed and passed all benchmark tests.
+- `auto_test.py
+
+- `auto-test-result.png`: auto-test.py passes 100%.
+<p align="center">
+  <img src="auto-test-result.png" alt="Auto Test Result: 100% Pass" width="600" />
+</p>

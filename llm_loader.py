@@ -52,9 +52,7 @@ def load_local_llm(model_id: str = MODEL_ID) -> Any:
 
     _tokenizer = AutoTokenizer.from_pretrained(
         model_id,
-        cache_dir=MODEL_CACHE_DIR,
-        local_files_only=True,
-        trust_remote_code=True,
+        cache_dir=MODEL_CACHE_DIR
     )
 
     model_kwargs = {
@@ -64,7 +62,7 @@ def load_local_llm(model_id: str = MODEL_ID) -> Any:
     if torch.cuda.is_available():
         model_kwargs["device_map"] = "auto"
 
-    model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs, local_files_only=True, trust_remote_code=True)
+    model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
 
     _raw_pipeline = pipeline(
         "text-generation",
