@@ -66,35 +66,189 @@ def generate_text(messages: list[dict[str, str]], max_new_tokens: int = 220) -> 
 
 
 def extract_entities(question: str) -> dict[str, Any]:
-	"""TODO(student, required): parse question to {question_type, subject_terms, aspect}."""
-	return {
-		"question_type": "general",
-		"subject_terms": [],
-		"aspect": "general",
-	}
+    """Parse question to extract type, terms, aspect."""
+    prompt = f"""
+Analyze this question about university regulations and extract:
+- question_type: The type of question (e.g., "penalty", "requirement", "procedure", "fee", "duration", "score", "general")
+- subject_terms: Key terms related to the subject (e.g., ["student ID", "exam"])
+- aspect: The specific aspect or condition (e.g., "forgetting", "late", "cheating")
+
+Return only JSON.
+
+Question: {question}
+
+Output: {{"question_type": "penalty", "subject_terms": ["student ID"], "aspect": "forgetting"}}
+"""
+    
+    messages = [{"role": "user", "content": prompt}]
+    try:
+        response = generate_text(messages, max_new_tokens=150)
+        import json
+        start = response.find('{')
+        end = response.rfind('}') + 1
+        if start != -1 and end != -1:
+            json_str = response[start:end]
+            entities = json.loads(json_str)
+            return entities
+    except:
+        pass
+    
+    # Fallback
+    return {
+        "question_type": "general",
+        "subject_terms": [],
+        "aspect": "general",
+    }
 
 
 def build_typed_cypher(entities: dict[str, Any]) -> tuple[str, str]:
-	"""TODO(student, required): return (typed_query, broad_query) with score and required fields."""
-	cypher_typed = """
-	"""
-
-	cypher_broad = """
-	"""
-
-	return cypher_typed, cypher_broad
+    """Return (typed_query, broad_query) with score and required fields."""
+    q_type = entities.get("question_type", "general")
+    terms = entities.get("subject_terms", [])
+    aspect = entities.get("aspect", "general")
+    
+    # Typed query: specific to type and terms
+    conditions = []
+    if q_type != "general":
+        conditions.append(f"r.type = '{q_type}'")
+    if terms:
+        term_conditions = " OR ".join([f"r.action CONTAINS '{term}' OR r.result CONTAINS '{term}'" for term in terms])
+        conditions.append(f"({term_conditions})")
+    if aspect != "general":
+        conditions.append(f"r.action CONTAINS '{aspect}'")
+    
+    where_clause = " AND ".join(conditions) if conditions else "true"
+    
+    cypher_typed = f"""
+    MATCH (r:Rule)
+    WHERE {where_clause}
+    RETURN r.rule_id, r.type, r.action, r.result, r.art_ref, r.reg_name, 1.0 as score
+    ORDER BY score DESC
+    LIMIT 10
+    """
+    
+    # Broad query: fulltext search
+    search_terms = " ".join(terms + [aspect] + [q_type])
+    cypher_broad = f"""
+    CALL db.index.fulltext.queryNodes("rule_idx", "{search_terms}") YIELD node, score
+    RETURN node.rule_id, node.type, node.action, node.result, node.art_ref, node.reg_name, score
+    ORDER BY score DESC
+    LIMIT 10
+    """
+    
+    return cypher_typed, cypher_broad
 
 
 def get_relevant_articles(question: str) -> list[dict[str, Any]]:
-	"""TODO(student, required): run typed+broad retrieval and return merged rule dicts."""
-	if driver is None:
-		return []
-	return []
+    """Run typed+broad retrieval and return merged rule dicts with article content."""
+    if driver is None:
+        return []
+    
+    entities = extract_entities(question)
+    typed_query, broad_query = build_typed_cypher(entities)
+    
+    results = []
+    seen = set()
+    
+    with driver.session() as session:
+        # Run typed query
+        try:
+            typed_results = session.run(typed_query)
+            for record in typed_results:
+                rule_id = record["r.rule_id"]
+                if rule_id not in seen:
+                    seen.add(rule_id)
+                    rule = {
+                        "rule_id": rule_id,
+                        "type": record["r.type"],
+                        "action": record["r.action"],
+                        "result": record["r.result"],
+                        "art_ref": record["r.art_ref"],
+                        "reg_name": record["r.reg_name"],
+                        "score": record["score"],
+                        "source": "typed"
+                    }
+                    results.append(rule)
+        except:
+            pass
+        
+        # Run broad query
+        try:
+            broad_results = session.run(broad_query)
+            for record in broad_results:
+                rule_id = record["node.rule_id"]
+                if rule_id not in seen:
+                    seen.add(rule_id)
+                    rule = {
+                        "rule_id": rule_id,
+                        "type": record["node.type"],
+                        "action": record["node.action"],
+                        "result": record["node.result"],
+                        "art_ref": record["node.art_ref"],
+                        "reg_name": record["node.reg_name"],
+                        "score": record["score"],
+                        "source": "broad"
+                    }
+                    results.append(rule)
+        except:
+            pass
+    
+    # Add article content from DB
+    import sqlite3
+    conn = sqlite3.connect("ncu_regulations.db")
+    cursor = conn.cursor()
+    
+    for rule in results:
+        art_ref = rule["art_ref"]
+        cursor.execute("SELECT content FROM articles WHERE article_number = ?", (art_ref,))
+        row = cursor.fetchone()
+        if row:
+            rule["article_content"] = row[0]
+        else:
+            rule["article_content"] = ""
+    
+    conn.close()
+    
+    return results
 
 
 def generate_answer(question: str, rule_results: list[dict[str, Any]]) -> str:
-	"""TODO(student, required): generate grounded answer from retrieved rules only."""
-	return "Insufficient rule evidence to answer this question."
+    """Generate grounded answer from retrieved rules only."""
+    if not rule_results:
+        return "Insufficient rule evidence to answer this question."
+    
+    # Prepare context
+    context = "Relevant rules:\n"
+    for rule in rule_results[:5]:  # Limit to top 5
+        context += f"- Type: {rule['type']}\n"
+        context += f"  Action: {rule['action']}\n"
+        context += f"  Result: {rule['result']}\n"
+        context += f"  Source: {rule['art_ref']} ({rule['reg_name']})\n"
+        if rule.get('article_content'):
+            # Add snippet
+            content = rule['article_content']
+            if len(content) > 200:
+                content = content[:200] + "..."
+            context += f"  Article text: {content}\n"
+        context += "\n"
+    
+    prompt = f"""
+Based on the following retrieved rules and article content, answer the question directly and concisely.
+Cite the source article in your answer.
+
+Question: {question}
+
+{context}
+
+Answer format: Direct answer. [Source: Article X]
+"""
+    
+    messages = [{"role": "user", "content": prompt}]
+    try:
+        answer = generate_text(messages, max_new_tokens=150)
+        return answer.strip()
+    except:
+        return "Unable to generate answer from retrieved evidence."
 
 
 def main() -> None:

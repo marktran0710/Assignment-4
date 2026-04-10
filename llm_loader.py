@@ -18,7 +18,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 from typing import Any
 
 # ── Configuration ────────────────────────────────────────────────────────────
-MODEL_ID = "Qwen/Qwen2.5-3B-Instruct"
+MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
 MODEL_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hf_model_cache")
 MAX_NEW_TOKENS = 512
 # ─────────────────────────────────────────────────────────────────────────────
@@ -88,3 +88,17 @@ def get_tokenizer():
 def get_raw_pipeline():
     """Return the raw HuggingFace pipeline (call load_local_llm first)."""
     return _raw_pipeline
+
+
+def generate_text(messages: list[dict[str, str]], max_new_tokens: int = 220) -> str:
+    """
+    Generate text using the loaded model.
+    """
+    tok = get_tokenizer()
+    pipe = get_raw_pipeline()
+    if tok is None or pipe is None:
+        load_local_llm()
+        tok = get_tokenizer()
+        pipe = get_raw_pipeline()
+    prompt = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    return pipe(prompt, max_new_tokens=max_new_tokens)[0]["generated_text"].strip()

@@ -15,7 +15,7 @@ from typing import Any
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
 
-from llm_loader import load_local_llm, get_tokenizer, get_raw_pipeline
+from llm_loader import load_local_llm, get_tokenizer, get_raw_pipeline, generate_text
 
 
 # ========== 0) Initialization ==========
@@ -29,10 +29,41 @@ AUTH = (
 
 
 def extract_entities(article_number: str, reg_name: str, content: str) -> dict[str, Any]:
-    """TODO(student, required): implement LLM extraction and return {"rules": [...]}"""
-    return {
-        "rules": []
-    }
+    """Extract rules from article content using LLM."""
+    prompt = f"""
+You are an expert at extracting structured rules from university regulation text.
+
+Given the article content below, extract all the specific rules or regulations mentioned.
+Each rule should have:
+- type: The category of the rule (e.g., "penalty", "requirement", "procedure", "limitation", "permission")
+- action: What the student does or the condition (e.g., "forgetting student ID", "being late", "cheating")
+- result: The consequence or outcome (e.g., "5 points deduction", "barred from exam", "zero score")
+
+Return only a JSON array of rule objects. If no rules are found, return an empty array.
+
+Article: {article_number}
+Regulation: {reg_name}
+Content: {content}
+
+Output format: [{{"type": "penalty", "action": "forgetting student ID", "result": "5 points deduction"}}]
+"""
+    
+    messages = [{"role": "user", "content": prompt}]
+    try:
+        response = generate_text(messages, max_new_tokens=500)
+        # Try to parse JSON
+        import json
+        start = response.find('[')
+        end = response.rfind(']') + 1
+        if start != -1 and end != -1:
+            json_str = response[start:end]
+            rules = json.loads(json_str)
+            if isinstance(rules, list):
+                return {"rules": rules}
+    except:
+        pass
+    
+    return {"rules": []}
 
 
 def build_fallback_rules(article_number: str, content: str) -> list[dict[str, str]]:
@@ -106,12 +137,43 @@ def build_graph() -> None:
 
         rule_counter = 0
 
-        # TODO(student, required):
-        # - iterate through all articles
-        # - call extract_entities(article_number, reg_name, content)
-        # - skip invalid rules with empty action/result
-        # - generate unique rule_id and deduplicate logically similar rules
-        # - create Rule nodes with required properties and link via CONTAINS_RULE
+        # Extract rules from articles
+        cursor.execute("SELECT reg_id, article_number, content FROM articles")
+        articles = cursor.fetchall()
+
+        for reg_id, article_number, content in articles:
+            reg_name, reg_category = reg_map.get(reg_id, ("Unknown", "Unknown"))
+            entities = extract_entities(article_number, reg_name, content)
+            rules = entities.get("rules", [])
+            
+            for rule in rules:
+                if not rule.get("action") or not rule.get("result"):
+                    continue  # Skip invalid rules
+                
+                rule_id = f"rule_{rule_counter}"
+                rule_counter += 1
+                
+                session.run(
+                    """
+                    MATCH (a:Article {number: $art_num})
+                    CREATE (r:Rule {
+                        rule_id: $rule_id,
+                        type: $type,
+                        action: $action,
+                        result: $result,
+                        art_ref: $art_ref,
+                        reg_name: $reg_name
+                    })
+                    MERGE (a)-[:CONTAINS_RULE]->(r)
+                    """,
+                    art_num=article_number,
+                    rule_id=rule_id,
+                    type=rule.get("type", "general"),
+                    action=rule["action"],
+                    result=rule["result"],
+                    art_ref=article_number,
+                    reg_name=reg_name,
+                )
 
         # 4) Create full-text index on Rule fields.
         session.run(
